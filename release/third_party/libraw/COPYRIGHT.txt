@@ -1,0 +1,4 @@
+LibRaw 0.21.3
+Copyright (C) 2008-2024 LibRaw LLC (info@libraw.org)
+
+Licensed under LGPL-2.1 or CDDL-1.0 (recipient's choice); see the licence text(s) in this folder.

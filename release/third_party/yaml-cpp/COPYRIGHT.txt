@@ -1,0 +1,4 @@
+yaml-cpp unknown
+Copyright (c) 2008-2015 Jesse Beder.
+
+Licensed under MIT; see the licence text(s) in this folder.

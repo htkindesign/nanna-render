@@ -1,0 +1,4 @@
+JsonCpp unknown
+Copyright (c) 2007-2010 Baptiste Lepilleur and The JsonCpp Authors
+
+Licensed under MIT (or Public Domain where recognised); see the licence text(s) in this folder.

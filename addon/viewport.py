@@ -17,7 +17,7 @@ import bpy
 
 from . import panels, runtime
 
-PAUSED = "MoonRay: the Rendered viewport is paused for the render"
+PAUSED = "Nanna Render: the Rendered viewport is paused for the render"
 WAIT_SECONDS = 30  # what a render waits for the viewport to let go. Stopping a frame can sit in MoonRay's render prep for 10 s or more
 SETTLE = 0.3  # seconds of no change before a restart
 SETTLE_MOST = 3.0  # a slow scene waits as long as its last start took, up to this
@@ -206,7 +206,7 @@ def update(engine, context, depsgraph):
         (edit if engine.engine_ptr else start)(engine, context, depsgraph)
     except Exception as error:
         traceback.print_exc()
-        engine.update_stats("", f"MoonRay: {error}")
+        engine.update_stats("", f"Nanna Render: {error}")
 
 
 def draw(engine, context, depsgraph):

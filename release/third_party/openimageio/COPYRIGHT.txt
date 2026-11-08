@@ -1,0 +1,4 @@
+OpenImageIO 2.5.18.0
+Copyright Contributors to the OpenImageIO project.
+
+Licensed under Apache-2.0 (verify: OIIO relicensed BSD-3 -> Apache-2.0 around 2.5); see the licence text(s) in this folder.

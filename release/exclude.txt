@@ -1,0 +1,24 @@
+# Files left out of the Nanna Render add-on zip, relative to the add-on's runtime\ folder. One glob per line ('*' never crosses '/',
+# '**' does), then ' # ' and why. Proof (2026-11-08, trim\): none is imported, statically or delay-loaded, by the Hydra plugin
+# (plugInfo LibraryPath), the add-on's preload.txt or any rdl2dso/*.so (static_closure.py); none is loaded by Blender during an F12
+# (out\*.modules.txt); and F12 Device CPU with all of them gone matches the full runtime within same-seed run-to-run noise (hdbuild/prep/exrcmp.py), and the panel test passes.
+# rdl2dso/ is kept whole: which shader classes load depends on the user's materials, and all of it is OpenMoonRay Apache-2.0, so leaving any out saves no licence.
+bin/Qt5*.dll  # Qt 5: only moonray_gui.exe uses it; the add-on renders through Hydra, never the MoonRay GUI
+bin/qt/**  # Qt 5 plugins (40), loaded only by Qt
+bin/moonray_gui.exe  # MoonRay's standalone GUI: the add-on never starts it
+bin/moonray.exe  # MoonRay's command-line renderer: the add-on never starts it
+bin/libssl-1_1.dll  # OpenSSL TLS: nothing in the runtime imports it (libcrypto-1_1.dll stays: common_grid_util.dll imports it)
+bin/glew32.dll  # GLEW: only moonray_gui.exe imports it
+bin/OpenImageDenoise*.dll  # MoonRay's renamed OIDN core, CPU and CUDA devices: imported only by OpenImageDenoism.dll and each other; the add-on denoises with Blender's own OIDN (denoise.py)
+bin/OpenImageDenois?.dll  # MoonRay's renamed OIDN (OpenImageDenoism.dll): imported only by denoiser.dll
+bin/denoiser.dll  # MoonRay's OIDN wrapper: imported only by moonray_gui.exe
+bin/application.dll  # MoonRay app framework: imported only by moonray.exe and moonray_gui.exe
+bin/grid_engine_tool.dll  # Arras grid tool: nothing in the runtime imports it
+bin/common_rec_time.dll  # nothing in the runtime imports it
+bin/pdevunit.dll  # nothing in the runtime imports it
+bin/boost_python310.dll  # Boost.Python: nothing in the runtime imports it (boost_thread.dll stays)
+bin/hdMoonrayAdapters.dll  # nothing in the runtime imports it and no plugInfo names it
+bin/moonrayShaderDiscovery.dll  # USD Sdr plugin not registered in plugin/pxr, never loaded
+bin/moonrayShaderParser.dll  # USD Sdr plugin not registered in plugin/pxr, never loaded
+bin/OpenEXRUtim.dll  # OpenEXRUtil: nothing in the runtime imports it (OpenEXR core stays)
+bin/tbbmalloc_proxm.dll  # TBB malloc proxy: imported only by moonray.exe and moonray_gui.exe (tbbmallom.dll stays: tbb.dll loads it at run time)

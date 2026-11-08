@@ -1,0 +1,4 @@
+OpenVDB (+ NanoVDB headers in pbrt) MoonRay bin: unknown (VFX2023 platform, likely 10.x); pbrt ext: 2021-11 snapshot
+Copyright Contributors to the OpenVDB Project
+
+Licensed under MPL-2.0; see the licence text(s) in this folder.

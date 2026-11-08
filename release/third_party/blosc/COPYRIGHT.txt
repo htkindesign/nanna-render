@@ -1,0 +1,4 @@
+c-blosc 1.21.1
+Copyright (C) 2009-2018 Francesc Alted <francesc@blosc.org>. Copyright (C) 2019-present Blosc Development team <blosc@blosc.org>. Copyright (C) 2006 by Rob Landley <rob@landley.net>.
+
+Licensed under BSD-3-Clause; see the licence text(s) in this folder.

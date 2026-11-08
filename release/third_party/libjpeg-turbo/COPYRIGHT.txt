@@ -1,0 +1,4 @@
+libjpeg-turbo 3.1.0
+Copyright (C)2009-2024 D. R. Commander. All Rights Reserved. Copyright (C)2015 Viktor Szathmary. All Rights Reserved. This software is based in part on the work of the Independent JPEG Group.
+
+Licensed under IJG + BSD-3-Clause + Zlib; see the licence text(s) in this folder.

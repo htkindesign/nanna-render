@@ -31,10 +31,13 @@ rem Packaging (build_dist.py) and Blender. NANNA_ADDON is required by build_dist
 set "NANNA_BLENDER=C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 for %%i in ("%NANNA_BLENDER%") do set "BLENDER_DIR=%%~dpi."
 set "NANNA_ADDON=%~dp0addon"
-rem NANNA_RUNTIME: default build\hdmoonray\isolated. NANNA_GPU_RUNTIME: pbrt.exe's folder, unset = no Device GPU. NANNA_DIST: default build\hdmoonray\dist
+rem NANNA_RUNTIME: default build\hdmoonray\isolated. NANNA_DIST: default build\hdmoonray\dist
+rem NANNA_GPU_RUNTIME: nanna_gpu.exe's folder; NANNA_GPU_HYDRA: the delegate's runtime (bin\hdNannaGpu.dll, plugin\). Both unset = no Device GPU.
 set "NANNA_GPU_RUNTIME="
+set "NANNA_GPU_HYDRA="
+rem Optional for build_server.bat: NANNA_PBRT_DEPS (imath-src\ and deflate-src\ instead of fetching them), NANNA_JOBS (default 8).
 
 rem Running the add-on from its source folder, without installing the zip (development only; an installed add-on uses its runtime folder):
 rem   HDMOONRAY_ROOT  the MoonRay runtime (build\hdmoonray\isolated)
-rem   NANNA_GPU_ROOT  pbrt.exe's folder, for Device GPU
+rem   Device GPU: copy NANNA_GPU_RUNTIME and NANNA_GPU_HYDRA into addon\runtime\gpu and addon\runtime\gpu_hydra
 rem export_pbrt.py finds the add-on by itself; NANNA_ADDON_PARENT overrides it (the folder that holds addon\).

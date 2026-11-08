@@ -13,7 +13,7 @@ from their own location, and stop if a root it needs is unset; nothing else need
 | MoonRay Windows package | https://github.com/mnraker/openmoonray/releases, folder `preview_opensourcedays2025_openmoonray_vfx2023_qt_usd` | MoonRay 17.14 (`lib\cmake\Moonray-17.14.0.0`), hdMoonray 6.16, zip SHA-256 `a0717efd39837bb386bd998363bbc69c2c9fccf363a248eed06ccff04b563ed6` | its `openmoonray` folder is `NANNA_MOONRAY_PKG`. Only read |
 | hdMoonray | https://github.com/mnraker/hdMoonray | commit `a71790f61810dca9376bb3d0f5580c225937f5b7` | `%NANNA_HD%\hdMoonray`. No local changes: `edit_hdmoonray.py` makes a changed copy |
 | OpenUSD | https://github.com/PixarAnimationStudios/OpenUSD | tag `v25.08` (`71e038c1`) | `%NANNA_HD%\OpenUSD`. Headers only |
-| oneTBB headers | https://github.com/uxlfoundation/oneTBB | tag `v2022.3.0` | `%NANNA_HD%\probe\oneTBB`. For the ABI check only |
+| oneTBB headers | https://github.com/uxlfoundation/oneTBB | tag `v2022.3.0` | `%NANNA_HD%\probe\oneTBB`. The headers `gpu\delegate\build.bat` compiles `hdNannaGpu.dll` with (the TBB of Blender's `usd_ms.dll`), and step 1's ABI check |
 | TBB 2020 headers | https://github.com/uxlfoundation/oneTBB | tag `v2020.3` (`eca91f16`) | `build\hdmoonray\tbb2020\include` |
 | MoonRay source | https://github.com/dreamworksanimation/moonray | commit `eef67ae992b5037943a7716cca96ed443c36dcec` | `%NANNA_HD%\src\moonray`. Kernel: the energy compensation tables (`gen_tables.py`) and the ISPC stub list (`mkstubs.py`) |
 | MoonRay source, Windows fork | https://github.com/mnraker/moonray | commit `e425507090a13fc5a0da9845b6cbd6ce953b8c96` | its `lib` folder as `%NANNA_MOONRAY_INC%\moonray` (a junction: `mklink /J "%NANNA_MOONRAY_INC%\moonray" <checkout>\lib`). Kernel tests: `#include <moonray/...>` headers |
@@ -98,7 +98,11 @@ libraries, the CUDA check and the PTX, and runs the four checks into `gpu\kernel
 (`NANNA_PREP`), the MoonRay headers through `NANNA_MOONRAY_INC`, and the package's `bin` on `PATH` to run.
 `build_gpu.bat` alone needs only CUDA.
 
-## 3. pbrt.exe for Device GPU (optional)
+## 3. nanna_gpu.exe and the hdNannaGpu delegate for Device GPU (optional)
+
+Device GPU is two parts: `nanna_gpu.exe`, a modified pbrt-v4 that stays running as a server process, and `hdNannaGpu.dll`, a
+small Hydra render delegate inside Blender that turns Hydra's meshes and camera into pbrt scenes and sends them to that server.
+A fault in the server fails a frame, never Blender.
 
 ```bat
 cd /d <repo>
@@ -110,18 +114,33 @@ copy gpu\kernel\lobes.h "%NANNA_PBRT_WORK%\nk\"
 copy gpu\kernel\lobe_tables.h "%NANNA_PBRT_WORK%\nk\"
 cd /d "%NANNA_PBRT_WORK%"
 python -I <repo>\gpu\pbrt\patch_pbrt.py
-<repo>\gpu\pbrt\build.bat
+python -I <repo>\gpu\pbrt\patch_server.py
+python -I <repo>\gpu\pbrt\patch_memory.py
+python -I <repo>\gpu\pbrt\patch_aux.py
+<repo>\gpu\pbrt\build_server.bat
+cd /d <repo>
+gpu\delegate\build.bat
 ```
 
-`patch_pbrt.py` changes a clean checkout once (it runs `patch_f12.py` at its end) and stops on anything it doesn't find.
-`build.bat` configures once and builds `pbrt_exe` into `%NANNA_PBRT_WORK%\build`. `build_nanna.sh` runs it under a timeout from Git Bash.
+`patch_pbrt.py` changes a clean checkout once (it runs `patch_f12.py` at its end); `patch_server.py` adds the server mode
+(`--nanna-serve`, protocol in its docstring), `patch_memory.py` frees a scene when the next one loads, `patch_aux.py` writes albedo and
+normal beside an F12 picture for Denoise. Each stops on anything it doesn't find, so run them in this order on a clean checkout.
+`build_server.bat` configures once, builds `pbrt_exe` into `%NANNA_PBRT_WORK%\build` and copies it to `nanna_gpu.exe` there.
+`build.bat` is the same build without the copy (`build_nanna.sh` runs it under a timeout from Git Bash); on a checkout with only
+`patch_pbrt.py` applied it gives the earlier one-shot `pbrt.exe`, which the add-on no longer ships.
 
-The add-on accepts only the `pbrt.exe` whose SHA-256 is `PBRT_SHA256` in `addon\gpu.py`, with `VERSION.txt` beside it whose first
-line is `VERSION` there. A new build needs both updated. Its folder (`NANNA_GPU_RUNTIME`) holds `pbrt.exe`, `VERSION.txt`, pbrt's
-`LICENSE.txt` as `pbrt_LICENSE.txt`, and the MSVC 14.44 runtime: `msvcp140.dll`, `msvcp140_codecvt_ids.dll`, `vcruntime140.dll`,
-`vcruntime140_1.dll`. The CUDA runtime is linked in; OptiX comes with the NVIDIA driver.
+`gpu\delegate\build.bat` compiles `gpu\delegate\src\nanna_gpu.cpp` into `gpu\delegate\build\hdNannaGpu.dll` against step 1's
+`include`, `lib\usd_ms.lib` and `deps\python313` (`NANNA_PREP`), OpenUSD's headers and the oneTBB headers (`NANNA_HD`). It links only
+Blender's `usd_ms.dll` and `python313.dll`: no CUDA, no pbrt and no TBB DLL go into Blender's process.
 
-`gpu\pbrt\export_pbrt.py` writes a Blender scene as a pbrt scene the way Device GPU does, for testing outside the add-on:
+Two runtime folders come out of this step:
+- `NANNA_GPU_RUNTIME`: `nanna_gpu.exe`, `VERSION.txt`, pbrt's `LICENSE.txt` as `pbrt_LICENSE.txt`, and the MSVC 14.44 runtime:
+  `msvcp140.dll`, `msvcp140_codecvt_ids.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`. The CUDA runtime is linked in; OptiX comes
+  with the NVIDIA driver. The add-on accepts only the `nanna_gpu.exe` whose SHA-256 is `SERVER_SHA256` in `addon\gpu_hydra.py`, with
+  a `VERSION.txt` whose first line is `SERVER_VERSION` there. A new build needs both updated.
+- `NANNA_GPU_HYDRA`: `bin\hdNannaGpu.dll` and a copy of `gpu\delegate\plugin` as `plugin` (the two `plugInfo.json` files).
+
+`gpu\pbrt\export_pbrt.py` writes a Blender scene as a pbrt scene the way the earlier one-shot route did, for testing outside the add-on:
 `blender --background <file.blend> --python gpu\pbrt\export_pbrt.py -- <out folder> <width>`.
 
 ## 4. Package
@@ -131,15 +150,37 @@ cd /d <repo>
 python -I build\hdmoonray\build_dist.py
 ```
 
-Stages `addon`, `NANNA_RUNTIME` as `runtime` and, if set, `NANNA_GPU_RUNTIME` as `runtime\gpu`, builds and validates the zip
-with `blender --command extension` on an empty user folder, and checks the add-on files in it. Output:
-`build\hdmoonray\dist\moonray_hydra-<version>-windows-x64.zip`.
+Stages `addon`, `NANNA_RUNTIME` as `runtime` and, if set, `NANNA_GPU_RUNTIME` as `runtime\gpu` and `NANNA_GPU_HYDRA` as
+`runtime\gpu_hydra`, builds and validates the zip with `blender --command extension` on an empty user folder, and checks the add-on
+files in it. Output: `build\hdmoonray\dist\moonray_hydra-<version>-windows-x64.zip`.
+
+### 4b. Trim
+
+```bat
+python -I release\apply_exclude.py build\hdmoonray\dist\moonray_hydra-<version>-windows-x64.zip
+```
+
+Leaves out the MoonRay package files the add-on never loads (`release\exclude.txt`: the Qt GUI, GLEW, MoonRay's own OIDN, the
+command-line tools), writing `moonray_hydra-<version>-windows-x64-trimmed.zip` beside the input. The input is only read. It checks
+that every pattern matched, every kept file is byte-identical and the Hydra plugin is still there, and validates the result.
+
+### 4c. Licence texts
+
+```bat
+python -I release\add_third_party.py build\hdmoonray\dist\moonray_hydra-<version>-windows-x64-trimmed.zip build\hdmoonray\dist\nanna_render-<version>-windows-x64.zip
+```
+
+Adds `LICENSE` (the repo root's GPL-3.0 text), `release\THIRD_PARTY.md` and `release\third_party\` (every third-party licence
+text) to the add-on folder of the zip, checks every entry byte for byte and validates it.
+
+The release file is `nanna_render-<version>-windows-x64.zip`, the output of 4c. Publish only that one: the zips of steps 4 and
+4b lack the licence texts.
 
 ## Running from the source folder
 
 For development, the add-on can run without the zip: put the repo root on `sys.path`, `import addon; addon.register()`, and set
-`HDMOONRAY_ROOT` to the runtime folder (`build\hdmoonray\isolated`) and, for Device GPU, `NANNA_GPU_ROOT` to `pbrt.exe`'s folder.
-An installed add-on uses its own `runtime` folder and needs neither.
+`HDMOONRAY_ROOT` to the runtime folder (`build\hdmoonray\isolated`). Device GPU looks only in the add-on's own `runtime\gpu` and
+`runtime\gpu_hydra`, so for it copy the two folders of step 3 there. An installed add-on has them already.
 
 ## Known limits
 

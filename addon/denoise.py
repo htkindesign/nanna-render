@@ -89,8 +89,10 @@ def replace(engine, layer_name, width, height, pixels):
     engine.end_result(out)
 
 
-def apply(engine, layer_name):
-    """Replaces the Combined pass of this view layer. Returns False if there's no result to work on."""
+def apply(engine, layer_name, aux=True):
+    """Replaces the Combined pass of this view layer. Returns False if there's no result to work on. aux True: the Denoising Normal and
+    Albedo passes (Device CPU). aux (albedo, normal), rows bottom up: given directly (Device GPU, from the delegate's gbuffer film). aux
+    False: colour only (a GPU frame with no albedo or normal; the blank Denoising passes Blender may hold would spoil OIDN's result)."""
     result = engine.get_result()
     layer = result.layers.get(layer_name) if result else None
     combined = layer.passes.get("Combined") if layer else None
@@ -98,7 +100,11 @@ def apply(engine, layer_name):
         return False
     height, width = result.resolution_y, result.resolution_x
     colour = read(combined, height, width)
-    normal, albedo = (read(layer.passes[name], height, width) if name in layer.passes else None for name in ("Denoising Normal", "Denoising Albedo"))
+    if isinstance(aux, tuple):
+        albedo, normal = aux if aux[0].shape[:2] == (height, width) else (None, None)
+    else:
+        normal, albedo = (read(layer.passes[name], height, width) if aux and name in layer.passes else None
+                          for name in ("Denoising Normal", "Denoising Albedo"))
     run(colour, normal, albedo)
     replace(engine, layer_name, width, height, {"Combined": colour})
     return True

@@ -17,9 +17,13 @@ Apache-2.0 files; the build fetches or uses it as described in BUILD.md.
 - OpenUSD, Copyright Pixar. Modified Apache License 2.0 (Tomorrow Open Source Technology License 1.0).
   https://github.com/PixarAnimationStudios/OpenUSD, tag v25.08, headers only.
 - pbrt-v4, Copyright 1998-2020 Matt Pharr, Wenzel Jakob and Greg Humphreys. Apache License 2.0.
-  https://github.com/mmp/pbrt-v4, commit b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f, changed by gpu/pbrt/patch_pbrt.py.
+  https://github.com/mmp/pbrt-v4, commit b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f, changed by gpu/pbrt/patch_pbrt.py,
+  patch_f12.py, patch_server.py, patch_memory.py and patch_aux.py. nanna_gpu.exe, the Device GPU renderer the add-on
+  ships and runs, is this modified pbrt-v4 (built by gpu/pbrt/build_server.bat).
 - Blender and its Python API, Blender Foundation. GPL-2.0-or-later. https://www.blender.org
-- NVIDIA CUDA Toolkit 12.4 and OptiX SDK 7.6, used through their SDKs under NVIDIA's licence terms. Not redistributed here.
+- NVIDIA CUDA Toolkit 12.4 and OptiX SDK 7.6, used through their SDKs under NVIDIA's licence terms. Not in this repository;
+  the release's nanna_gpu.exe contains the CUDA 12.4 runtime (cudart_static) and code compiled from the OptiX 7.6 SDK headers,
+  distributed under NVIDIA's terms (THIRD_PARTY.md and third_party/cuda, third_party/optix in the release package).
 - oneTBB / TBB 2020, Boost 1.80, log4cplus 2.1.1, Lua 5.4.7 and CPython 3.13.9 headers are fetched at build time
   (BUILD.md) under their own licences.
 
@@ -30,6 +34,9 @@ this project's copyright:
   build/hdmoonray/edit_hdmoonray.py      excerpts of hdMoonray and their changed versions
   gpu/pbrt/patch_pbrt.py                 excerpts of pbrt-v4 and their changed versions
   gpu/pbrt/patch_f12.py                  excerpts of pbrt-v4 and their changed versions
+  gpu/pbrt/patch_server.py               excerpts of pbrt-v4 and their changed versions (nanna_gpu.exe's server mode)
+  gpu/pbrt/patch_memory.py               excerpts of pbrt-v4 and their changed versions (scene reload)
+  gpu/pbrt/patch_aux.py                  excerpts of pbrt-v4 and their changed versions (albedo and normal for Denoise)
   gpu/pbrt/nanna_bxdf.inc                code added to pbrt-v4, following MoonRay's rules
   gpu/pbrt/nanna_create.inc              code added to pbrt-v4
   gpu/pbrt/nanna_material.inc            code added to pbrt-v4
@@ -41,3 +48,7 @@ this project's copyright:
 
 Nanna Render is not affiliated with or endorsed by DreamWorks Animation, Pixar, the pbrt authors, NVIDIA or the
 Blender Foundation.
+
+The release package includes software developed by the OpenSSL Project for use in the OpenSSL Toolkit
+(http://www.openssl.org/), and cryptographic software written by Eric Young (eay@cryptsoft.com).
+See THIRD_PARTY.md in the release package for all third-party components and their licences.

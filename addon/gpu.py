@@ -1,22 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright 2026 Kiet Ho
-"""Device GPU: F12 through Nanna's pbrt.exe in its own process. Device CPU never comes here and stays on Hydra.
+"""Device GPU's scene inputs: Export writes what only native.py can translate (materials, textures, lights, the world) as pbrt
+blocks for the hdNannaGpu delegate (gpu_hydra.write_inputs), and read_exr reads the delegate's albedo and normal for Denoise.
 
-The scene is written as gpu\\pbrt\\export_pbrt.py writes it (the exporter every GPU picture so far was checked with): each
-material through native.translate as Material "nanna", its maps from the add-on's .tx copies, Blender's lights, the world as an equal-area EXR.
-pbrt.exe renders it into an EXR, which goes into the Render Result. Esc kills the process. A crash in pbrt can't take Blender down.
-pbrt.exe needs the NVIDIA driver only: CUDA's runtime is linked in, OptiX comes with the driver (nvoptix.dll), the MSVC runtime is shipped beside it.
+The scene is written as gpu/pbrt/export_pbrt.py writes it: each material through native.translate as Material "nanna", its maps
+from the add-on's .tx copies, Blender's lights, the world as an equal-area EXR.
 """
-import atexit
-import hashlib
 import math
 import os
-import re
-import shutil
-import subprocess
-import tempfile
-import threading
-import time
 
 import bpy
 import mathutils
@@ -24,40 +15,6 @@ import numpy as np
 
 from . import native
 from . import textures as addon_textures
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-PBRT_SHA256 = "cf3a2d5ef8dc9249b1d29dcd083b949eaad773f9ff9ff475fdae7c65a9594576"  # the build of patch_pbrt.py with patch_f12.py on pbrt-v4 b0bdf46, 2026-11-08
-VERSION = "nanna-pbrt b0bdf46+patch_pbrt+f12 2026-11-08"  # first line of VERSION.txt beside pbrt.exe
-_checked = {}  # path -> (size, mtime) that passed the hash check
-
-
-def find_pbrt():
-    """The add-on's runtime\\gpu, else NANNA_GPU_ROOT (a developer's staged pbrt.exe, for running the add-on from its source folder).
-    Raises the reason it can't run."""
-    for folder in (os.path.join(HERE, "runtime", "gpu"), os.environ.get("NANNA_GPU_ROOT", "")):
-        if not folder:
-            continue
-        exe = os.path.join(folder, "pbrt.exe")
-        if os.path.isfile(exe):
-            break
-    else:
-        raise RuntimeError("GPU: no pbrt.exe in the add-on's runtime\\gpu folder")
-    try:
-        with open(os.path.join(folder, "VERSION.txt"), encoding="utf-8") as f:
-            version = f.readline().strip()
-    except OSError:
-        version = ""
-    if version != VERSION:
-        raise RuntimeError(f"GPU: runtime\\gpu is '{version or 'unversioned'}', this add-on needs '{VERSION}'")
-    stat = os.stat(exe)
-    if _checked.get(exe) != (stat.st_size, stat.st_mtime):
-        with open(exe, "rb") as f:
-            if hashlib.file_digest(f, "sha256").hexdigest() != PBRT_SHA256:
-                raise RuntimeError("GPU: pbrt.exe isn't the build this add-on was made with. Reinstall the add-on")
-        _checked[exe] = (stat.st_size, stat.st_mtime)
-    if not os.path.isfile(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "nvcuda.dll")):
-        raise RuntimeError("GPU: no NVIDIA driver found (nvcuda.dll). Device GPU needs an NVIDIA RTX card and its driver")
-    return exe
 
 
 def rgb(color):
@@ -308,6 +265,29 @@ class Export:
             line = f'AreaLightSource "diffuse" "rgb L" {rgb(glow)} "bool twosided" true\n' + line
         return line
 
+    def world_pixels(self, image):
+        """The Environment Texture's pixels as RGB float32, rows top down: its file, else Blender's own pixels (packed, generated or
+        only in memory). None, with a warning, if it has none: the world is then left out, not the frame."""
+        import OpenImageIO as oiio
+        if image is None:
+            self.unmapped.add("world: the Environment Texture has no image, the world is left out")
+            return None
+        path = bpy.path.abspath(image.filepath) if image.filepath else ""
+        if image.source == "FILE" and not image.packed_file and path and os.path.isfile(path):
+            src = oiio.ImageBuf(path)
+            pixels = None if src.has_error else src.get_pixels(oiio.FLOAT)
+            if pixels is not None and pixels.ndim == 3:
+                return np.ascontiguousarray(np.repeat(pixels[..., :1], 3, 2) if pixels.shape[2] < 3 else pixels[..., :3], np.float32)
+        width, height = image.size
+        channels = image.channels
+        if width and height and channels:
+            pixels = np.empty(width * height * channels, np.float32)
+            image.pixels.foreach_get(pixels)
+            pixels = pixels.reshape(height, width, channels)[::-1]  # Blender's first row is the bottom one
+            return np.ascontiguousarray(np.repeat(pixels[..., :1], 3, 2) if channels < 3 else pixels[..., :3], np.float32)
+        self.unmapped.add(f"world image {image.name}: file not found ({path or 'no path'}), the world is left out")
+        return None
+
     def world_image(self, lights_sun, n=2048):
         """The world as pbrt's equal-area square: Environment Texture (equirect, Cycles' mapping) times Strength, plus each sun as a disc."""
         import OpenImageIO as oiio
@@ -323,17 +303,17 @@ class Export:
                 color = bg.inputs["Color"]
                 env = color.links[0].from_node if color.is_linked else None
                 if env is not None and env.type == "TEX_ENVIRONMENT" and env.projection == "EQUIRECTANGULAR" and not env.inputs["Vector"].is_linked:
-                    src = oiio.ImageBuf(bpy.path.abspath(env.image.filepath))
-                    img = src.get_pixels(oiio.FLOAT)[..., :3]
-                    h, w = img.shape[:2]
-                    uu = (0.5 - np.arctan2(d[..., 1], d[..., 0]) / (2 * np.pi)) % 1  # Cycles' direction_to_equirectangular
-                    vv = 0.5 + np.arcsin(np.clip(d[..., 2], -1, 1)) / np.pi
-                    fx, fy = uu * w - .5, (1 - vv) * h - .5
-                    x0, y0 = np.floor(fx).astype(int), np.floor(fy).astype(int)
-                    tx, ty = (fx - x0)[..., None], (fy - y0)[..., None]
-                    px = lambda yy, xx: img[np.clip(yy, 0, h - 1), xx % w]
-                    radiance = ((px(y0, x0) * (1 - tx) + px(y0, x0 + 1) * tx) * (1 - ty) + (px(y0 + 1, x0) * (1 - tx) + px(y0 + 1, x0 + 1) * tx) * ty)
-                    radiance = (radiance * strength).astype(np.float32)
+                    img = self.world_pixels(env.image)
+                    if img is not None:
+                        h, w = img.shape[:2]
+                        uu = (0.5 - np.arctan2(d[..., 1], d[..., 0]) / (2 * np.pi)) % 1  # Cycles' direction_to_equirectangular
+                        vv = 0.5 + np.arcsin(np.clip(d[..., 2], -1, 1)) / np.pi
+                        fx, fy = uu * w - .5, (1 - vv) * h - .5
+                        x0, y0 = np.floor(fx).astype(int), np.floor(fy).astype(int)
+                        tx, ty = (fx - x0)[..., None], (fy - y0)[..., None]
+                        px = lambda yy, xx: img[np.clip(yy, 0, h - 1), xx % w]
+                        radiance = ((px(y0, x0) * (1 - tx) + px(y0, x0 + 1) * tx) * (1 - ty) + (px(y0 + 1, x0) * (1 - tx) + px(y0 + 1, x0 + 1) * tx) * ty)
+                        radiance = (radiance * strength).astype(np.float32)
                 elif not color.is_linked:
                     radiance[:] = np.array(color.default_value[:3]) * strength
                 else:
@@ -533,20 +513,6 @@ class Export:
         return True
 
 
-def problems(scene, view_layer):
-    """What Device GPU leaves out, for the warnings."""
-    panel, found = scene.moonray_hydra, []
-    if panel.sampling_mode == "ADAPTIVE":
-        found.append("GPU: Adaptive sampling isn't on the GPU yet, it renders Pixel Samples squared")
-    if scene.render.film_transparent:
-        found.append("GPU: Transparent film isn't on the GPU yet, the world shows")
-    if scene.render.use_motion_blur:
-        found.append("GPU: motion blur isn't on the GPU yet")
-    from . import panels
-    if panels.enabled_passes(view_layer):
-        found.append("GPU: only the Combined pass is rendered, other passes stay empty")
-    return found
-
 
 def read_exr(path):
     """Colour, albedo, normal as float32 rows top down, the last two None if the file hasn't them."""
@@ -565,217 +531,3 @@ def read_exr(path):
     if normal is not None:
         normal[..., 2] *= -1  # the CPU path's Denoising Normal: +z toward the viewer (measured, x and y agree)
     return take(("R", "G", "B")), take(("Albedo.R", "Albedo.G", "Albedo.B")), normal
-
-
-phases = [None, None, None]
-
-
-class Warm:
-    """One pbrt.exe --nanna-wait (patch_f12.py): it starts CUDA and loads its kernels (about 10 s), then waits for one scene.
-    The add-on keeps one ready, so an F12 skips that start-up. Each process renders one scene and exits: no state is carried
-    from one F12 to the next. It exits when its stdin closes, so it goes with Blender even if Blender crashes."""
-
-    def __init__(self, exe):
-        self.exe, self.output, self.sent = exe, [], None
-        self.process = subprocess.Popen([exe, "--gpu", "--nanna-wait"], cwd=tempfile.gettempdir(), stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
-        self.thread = threading.Thread(target=self.read, daemon=True)
-        self.thread.start()
-
-    def read(self):
-        for chunk in iter(lambda: self.process.stdout.read1(4096), b""):
-            self.output.append(chunk.decode("utf-8", "replace"))
-
-    def alive(self):
-        return self.process.poll() is None
-
-    def started(self):
-        return "NANNA_READY" in "".join(self.output)
-
-    def release(self):
-        """Closes its stdin: a waiting pbrt exits at once, a starting one at the end of its start-up. Not killed: a pbrt killed while
-        loading its kernels stayed in the driver's teardown for over a minute and held up the next start-up (NOTES, F12 start-up)."""
-        try:
-            self.process.stdin.close()
-        except OSError:
-            pass
-
-    def kill(self):
-        """TerminateProcess. A pbrt still loading its kernels can take seconds to go: not waited for."""
-        if self.alive():
-            try:
-                self.process.kill()
-            except OSError:
-                pass
-
-
-_warm = None  # the waiting Warm
-_busy = set()  # Warm processes given a scene and not yet gone
-
-
-def ready(exe):
-    """Makes sure a pbrt is starting or waiting."""
-    global _warm
-    if _warm is None or not _warm.alive() or _warm.exe != exe:
-        if _warm is not None:
-            _warm.release()
-        _warm = Warm(exe)
-
-
-def warm_up():
-    """Device GPU chosen or a file with it opened: a pbrt starts now, so the first F12 skips its start-up. Not without the runtime."""
-    try:
-        exe = find_pbrt()
-    except RuntimeError:
-        return
-    ready(exe)
-
-
-def release():
-    """Device CPU chosen: the waiting pbrt goes, through its stdin. A render's pbrt is left to finish."""
-    global _warm
-    if _warm is not None:
-        _warm.release()
-    _warm = None
-
-
-def take(exe):
-    """A started pbrt for this F12. The next one starts after this render (run_pbrt): a pbrt loading its kernels holds up the GPU
-    work of another (measured: a render beside a starting pbrt went 3.3 -> 11.7 s, two starting together took 19 s each)."""
-    global _warm
-    ready(exe)
-    warm, _warm = _warm, None
-    _busy.difference_update([w for w in _busy if not w.alive()])
-    _busy.add(warm)
-    return warm
-
-
-def stop():
-    """Ends every pbrt.exe the add-on started, at unregister and at Blender's exit: the waiting one through its stdin, rendering ones killed."""
-    release()
-    for warm in _busy:
-        warm.kill()
-    _busy.clear()
-
-
-atexit.register(stop)
-
-
-def run_pbrt(engine, exe, spp, seed, outfile, scenefile):
-    """Renders through a warm pbrt, with progress from its bar. Returns (0, None if cancelled or pbrt's exit code; last output lines)."""
-    global _warm
-    warm = take(exe)
-    start = time.time()
-    while warm.alive() and not warm.started():  # the scene goes once it's started, so Esc before then needn't kill it
-        if engine.test_break():
-            _busy.discard(warm)
-            if _warm is None:
-                _warm = warm  # still clean: it stays the spare
-            else:
-                warm.release()
-            return None, ""
-        time.sleep(0.05)
-    warm.sent = len(warm.output)
-    try:
-        warm.process.stdin.write(f"{spp}\t{seed}\t{outfile}\t{scenefile}\n".encode("utf-8"))
-        warm.process.stdin.flush()
-    except OSError:  # it died while waiting: wait() below reports its exit
-        pass
-    bar = re.compile(r"\[([+ ]+)\]")
-    phases[:] = [None, None, None]  # seconds to pbrt's first bar, to a full bar, to NANNA_DONE
-
-    def text():  # output read before the scene was sent is the start-up
-        return "".join(warm.output[warm.sent:])
-    while True:
-        if "NANNA_DONE" in text():
-            done = True
-            break
-        if not warm.alive():
-            warm.thread.join(5)
-            done = "NANNA_DONE" in text()
-            break
-        if engine.test_break():
-            warm.kill()
-            _busy.discard(warm)
-            ready(exe)
-            return None, ""
-        found = bar.findall("".join(warm.output[-4:]))
-        if found and len(warm.output) > warm.sent:
-            if phases[0] is None:
-                phases[0] = time.time() - start
-            if phases[1] is None and " " not in found[-1]:
-                phases[1] = time.time() - start
-            engine.update_progress(0.2 + 0.75 * found[-1].count("+") / max(len(found[-1]), 1))
-        time.sleep(0.05)
-    phases[2] = time.time() - start
-    ready(exe)  # the next F12's pbrt
-    full = "".join(warm.output)
-    tail = "\n".join(line for line in full.replace("\r", "\n").splitlines() if line.strip())[-1500:]
-    return (0 if done else warm.process.returncode), tail
-
-
-def render(engine, depsgraph):
-    """F12 on the GPU, the whole of it: export, render, read, denoise, into the Render Result."""
-    scene, layer_name = depsgraph.scene, depsgraph.view_layer.name
-    panel = scene.moonray_hydra
-    render_settings = scene.render
-    width = int(render_settings.resolution_x * render_settings.resolution_percentage / 100)
-    height = int(render_settings.resolution_y * render_settings.resolution_percentage / 100)
-    started = time.time()
-    exe = find_pbrt()
-    if scene.camera is None:
-        raise RuntimeError("GPU: the scene has no camera")
-    engine.warn(problems(scene, depsgraph.view_layer))
-    ready(exe)  # pbrt starts up while the scene is written
-    folder = tempfile.mkdtemp(prefix="nanna_gpu_")
-    try:
-        engine.update_stats("", "Nanna GPU: writing the scene")
-        engine.update_progress(0.0)
-        export = Export(depsgraph, folder, panel.look, (panel.diffuse_bounces, panel.glossy_bounces), engine.test_break)
-        spp = panel.pixel_samples ** 2
-        if not export.write(width, height, spp, panel.max_bounces, panel.denoise):  # gbuffer: albedo and normal for Denoise
-            return
-        if export.unmapped:
-            print("[moonray_hydra] GPU unmapped:", sorted(export.unmapped), flush=True)
-        exported = time.time()
-        engine.update_progress(0.2)
-        engine.update_stats("", f"Nanna GPU: rendering {spp} samples")
-        seed = 0 if panel.lock_frame_noise else scene.frame_current
-        code, tail = run_pbrt(engine, exe, spp, seed, os.path.join(folder, "out.exr"), os.path.join(folder, "scene.pbrt"))
-        if code is None:
-            return
-        if code != 0 or not os.path.isfile(os.path.join(folder, "out.exr")):
-            print(tail, flush=True)
-            last = [line for line in tail.splitlines() if "rror" in line or "FATAL" in line]
-            raise RuntimeError(f"GPU: pbrt stopped with exit {code}. {(last or tail.splitlines()[-1:] or [''])[-1][:300]}")
-        rendered = time.time()
-        colour, albedo, normal = read_exr(os.path.join(folder, "out.exr"))
-        rgba = np.concatenate([colour, np.ones(colour.shape[:2] + (1,), np.float32)], 2)
-        if panel.denoise and not engine.test_break():
-            engine.update_stats("", "Nanna GPU: denoising")
-            from . import denoise
-            try:
-                denoise.run(rgba, normal, albedo)
-            except Exception as failure:
-                engine.tell("WARNING", f"denoise failed, the frame stays as rendered. {type(failure).__name__}: {failure}")
-        result = engine.begin_result(0, 0, width, height, layer=layer_name)
-        passes = result.layers[0].passes
-        flip = lambda a: np.ascontiguousarray(a[::-1]).reshape(-1)  # Blender's rows go bottom up
-        passes["Combined"].rect.foreach_set(flip(rgba))
-        for name, data in (("Denoising Albedo", albedo), ("Denoising Normal", normal)):
-            if name in passes and data is not None:
-                passes[name].rect.foreach_set(flip(data))
-        engine.end_result(result)
-        engine.update_progress(1.0)
-        done = time.time()
-        print(f"[moonray_hydra] GPU F12 {width}x{height} {spp} spp: export {exported - started:.1f} s, pbrt {rendered - exported:.1f} s "
-              f"(first bar {phases[0]}, full bar {phases[1]}, done {phases[2]}), "
-              f"read and denoise {done - rendered:.1f} s, total {done - started:.1f} s", flush=True)
-    finally:
-        if os.environ.get("NANNA_GPU_KEEP"):  # a developer's look at the scene and pbrt's output
-            with open(os.path.join(folder, "pbrt.log"), "w", encoding="utf-8") as f:
-                f.write(locals().get("tail", ""))
-            print("[moonray_hydra] GPU scene kept in", folder, flush=True)
-        else:
-            shutil.rmtree(folder, ignore_errors=True)

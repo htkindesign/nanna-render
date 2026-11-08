@@ -1,0 +1,4 @@
+OpenColorIO 2.2.1
+Copyright Contributors to the OpenColorIO Project.
+
+Licensed under BSD-3-Clause; see the licence text(s) in this folder.

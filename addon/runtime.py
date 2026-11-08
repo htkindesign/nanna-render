@@ -30,11 +30,11 @@ def find_root(setting=""):
     if named:
         if _is_runtime(named):
             return named
-        raise RuntimeError(f"no MoonRay runtime in {named}: {PLUGIN_NAME}.dll is not in its bin folder")
+        raise RuntimeError(f"no Nanna Render Device CPU runtime in {named}: {PLUGIN_NAME}.dll is not in its bin folder")
     root = os.path.join(HERE, "runtime")
     if _is_runtime(root):
         return root
-    raise RuntimeError("no MoonRay runtime found: set Runtime Folder in the add-on's preferences")
+    raise RuntimeError("no Nanna Render Device CPU runtime found: set Runtime Folder in the add-on's preferences")
 
 
 def root_bin():
@@ -80,7 +80,7 @@ def setup(setting=""):
     registry = pxr.Plug.Registry()
     registry.RegisterPlugins(os.path.join(root, "plugin", "pxr"))
     if registry.GetPluginWithName(PLUGIN_NAME) is None:
-        raise RuntimeError(f"MoonRay plugin not found under {root}")
+        raise RuntimeError(f"Nanna Render's Device CPU plugin not found under {root}")
     load_runtime(root)
     _root = root
 

@@ -7,14 +7,16 @@ Cleanup isn't here on purpose. The delegate registers it with Py_AtExit when it 
 normal exit, whether or not this module is still enabled. See RndrRenderer.cc.
 """
 import os
+import time
 import traceback
 
 import bpy
 
-from . import panels, runtime, viewport
+from . import gpu_hydra, panels, runtime, viewport
 
 ENGINE = "MOONRAY_HYDRA"
-VIEWPORT_OFF = "MoonRay: viewport rendering is off for now. Use F12, or a Solid or Material Preview viewport"
+VIEWPORT_OFF = ("Nanna Render: the Rendered viewport runs on Device GPU. On Device CPU it is off unless Preferences > "
+                "Experimental: Rendered viewport is on. Use F12, or a Solid or Material Preview viewport")
 # Hydra exports what these edit. Blender's own Light panel only has the type, so the EEVEE one stands in, as Cycles has its own.
 SHARED_PANELS = ("EEVEE_MATERIAL_PT_context_material", "EEVEE_MATERIAL_PT_surface", "MATERIAL_PT_preview", "EEVEE_WORLD_PT_surface",
                  "DATA_PT_EEVEE_light", "NODE_DATA_PT_EEVEE_light", "DATA_PT_camera_dof", "DATA_PT_camera_dof_aperture")
@@ -27,11 +29,12 @@ class MoonRayHydraPreferences(bpy.types.AddonPreferences):
 
     runtime_path: bpy.props.StringProperty(
         name="Runtime Folder", subtype="DIR_PATH",
-        description="Folder holding MoonRay's bin, plugin and rdl2dso. Leave empty for the one inside the add-on. "
-                    "A change applies after restarting Blender if MoonRay has already rendered")
+        description="Folder holding Nanna Render's Device CPU runtime (bin, plugin and rdl2dso). Leave empty for the one inside the add-on. "
+                    "A change applies after restarting Blender if Device CPU has already rendered")
     experimental_viewport: bpy.props.BoolProperty(
         name="Experimental: Rendered viewport", default=False,
-        description="Render the viewport with MoonRay in Rendered shading. F12 stops it first and it starts again after the render. Not ready for real work")
+        description="Render the Device CPU viewport in Rendered shading. F12 stops it first and it starts again after the render. "
+                    "Not ready for real work. Device GPU's Rendered viewport is always on")
 
     def draw(self, context):
         self.layout.prop(self, "runtime_path")
@@ -63,6 +66,20 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
     settings_seen = None
     scene_seen = ""
     glow_seen = None
+    gpu_delegate = False  # Device GPU: engine_ptr is hdNannaGpu's (gpu_hydra.py), not hdMoonray's
+    gpu_folder = None
+
+    def use_gpu(self, gpu):
+        """Which delegate the next engine_create makes: HydraRenderEngine reads self.bl_delegate_id there. A delegate of the other
+        device is freed first, so switching Device in a Rendered viewport makes the new one."""
+        if self.engine_ptr and self.gpu_delegate != gpu:
+            if not gpu and viewport.viewport_engine() is self:
+                viewport.live = None
+            self.release()
+        self.gpu_delegate = gpu
+        self.bl_delegate_id = gpu_hydra.DELEGATE_ID if gpu else MoonRayHydraEngine.bl_delegate_id
+        if gpu and viewport.viewport_engine() is self:  # the CPU viewport's bookkeeping lets go of this engine
+            viewport.live = None
 
     def ready(self, depsgraph):
         """Raises the reason MoonRay can't run. Blender's update has then created no delegate."""
@@ -72,7 +89,7 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
         runtime.setup(addon.preferences.runtime_path if addon else "")
         os.environ["HDMOONRAY_THREADS"] = str(panels.thread_count(depsgraph.scene))  # read by RndrRenderer.cc
         if not self.engine_ptr and runtime.delegate_live():
-            raise RuntimeError("another MoonRay render is still running in this Blender. Wait for it to end, then render again")
+            raise RuntimeError("another Device CPU render is still running in this Blender. Wait for it to end, then render again")
 
     def release(self):
         """Every view layer and frame gets a new delegate, in every mode, so Persistent Data keeps nothing of MoonRay's. A reused delegate
@@ -97,8 +114,13 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
             viewport.stop_for_render()
             if self.first_layer(depsgraph):  # with Persistent Data this object lives through several renders
                 self.warned = frozenset()
-            if depsgraph.scene.moonray_hydra.device == "GPU":  # no delegate: render() hands the frame to gpu.py
+            gpu = depsgraph.scene.moonray_hydra.device == "GPU"
+            self.use_gpu(gpu)
+            if gpu:  # hdNannaGpu, see gpu_hydra.py
+                gpu_hydra.setup()
+                gpu_hydra.find_server()
                 self.depsgraph = depsgraph
+                super().update(data, depsgraph)
                 return
             self.ready(depsgraph)
             self.motion = panels.motion_settings(self, depsgraph)
@@ -108,20 +130,56 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
             self.setup_error = str(error) if isinstance(error, RuntimeError) else f"can't prepare the render, {type(error).__name__}: {error}"
 
     def view_update(self, context, depsgraph):
-        """Blocked unless the Experimental preference is on: a viewport is a second delegate on MoonRay's one render driver beside F12. See viewport.py."""
-        if viewport.enabled():
+        """Device GPU: hdNannaGpu, always on. Device CPU: blocked unless the Experimental preference is on: a viewport is a second delegate
+        on MoonRay's one render driver beside F12. See viewport.py."""
+        if context.scene.moonray_hydra.device == "GPU":
+            self.gpu_view_update(context, depsgraph)
+        elif self.gpu_delegate:
+            self.use_gpu(False)
+            if not viewport.enabled():
+                self.update_stats("", VIEWPORT_OFF)
+            else:
+                viewport.update(self, context, depsgraph)
+        elif viewport.enabled():
             viewport.update(self, context, depsgraph)
         else:
             self.update_stats("", VIEWPORT_OFF)
 
     def view_draw(self, context, depsgraph):
-        if viewport.enabled():
+        if context.scene.moonray_hydra.device == "GPU":
+            size = (context.region.width, context.region.height)
+            if self.engine_ptr and (not self.gpu_delegate or self.view_size not in (None, size)):
+                self.release()  # the other device's delegate, or a new size (a reused delegate at a new size crashes read_aov, see release())
+            if not self.engine_ptr:
+                self.gpu_view_update(context, depsgraph)
+            self.view_size = size
+            if self.engine_ptr:
+                super().view_draw(context, depsgraph)
+        elif viewport.enabled():
+            if self.gpu_delegate:
+                self.use_gpu(False)
             viewport.draw(self, context, depsgraph)
+
+    def gpu_view_update(self, context, depsgraph):
+        """The GPU Rendered viewport: one hdNannaGpu delegate kept across camera moves and edits (its pbrt server takes a camera move as a
+        camera command and an edit as a scene reload). A failure shows in the viewport's status text."""
+        try:
+            self.use_gpu(True)
+            gpu_hydra.setup()
+            self.depsgraph = depsgraph
+            super().view_update(context, depsgraph)
+            error = gpu_hydra.last_error()
+            self.update_stats("", "Nanna GPU: " + error[:200] if error else "")
+        except Exception as error:
+            traceback.print_exc()
+            self.update_stats("", f"Nanna GPU: {error}")
+        finally:
+            self.depsgraph = None
 
     def tell(self, level, message):
         """Also to the console: with a window, Blender's reports only reach the Info editor."""
         print(f"[moonray_hydra] {level}: {message}", flush=True)
-        self.report({level}, "MoonRay: " + message)
+        self.report({level}, "Nanna Render: " + message)
 
     def warn(self, problems):
         """Each once, also when a render has several view layers."""
@@ -131,10 +189,12 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
                 self.tell("WARNING", problem)
 
     def get_render_settings(self, engine_type):
+        if self.gpu_delegate:
+            return gpu_hydra.render_settings(self, engine_type)
         settings = {"blender:filmTransparent": self.film_transparent}
         if self.depsgraph:  # Blender calls this after engine_update, which is when its image cache is written
             from . import textures  # pulls in OpenImageIO, which only this engine needs
-            self.update_stats("", "MoonRay: preparing textures")
+            self.update_stats("", "Nanna Render: preparing textures")
             manifest, glows, problems = textures.prepare(self.depsgraph, self.test_break)
             settings["blender:textureManifest"] = manifest
             settings["blender:meshLights"] = glows
@@ -157,7 +217,7 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
                 settings.update(panels.viewport_settings(self.depsgraph.scene.original))
             settings.update(self.motion)
             settings["blender:worldStrength"] = world_strength(self.depsgraph.scene.world)
-            self.update_stats("", "MoonRay: baking the world")
+            self.update_stats("", "Nanna Render: baking the world")
             baked, problems = textures.bake_world(self.depsgraph, self.test_break, panels.thread_count(self.depsgraph.scene))
             self.warn(problems)
             if baked:  # holds the strength already
@@ -180,14 +240,32 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
             self.register_pass(scene, render_layer, name, channels, ids, kind)
 
     def render(self, depsgraph):
-        if depsgraph.scene.moonray_hydra.device == "GPU" and not self.setup_error:
-            try:
-                from . import gpu
-                gpu.render(self, depsgraph)
-            except Exception as failure:
-                traceback.print_exc()
-                self.tell("ERROR", str(failure) if isinstance(failure, RuntimeError) else f"the GPU render failed, {type(failure).__name__}: {failure}")
-            self.depsgraph = None
+        if self.gpu_delegate:  # Device GPU through hdNannaGpu (gpu_hydra.py)
+            error = self.setup_error or ("" if self.engine_ptr else "the GPU Hydra delegate could not be created, see the console")
+            if not error:
+                try:
+                    super().render(depsgraph)
+                    error = gpu_hydra.last_error()
+                except Exception as failure:
+                    traceback.print_exc()
+                    error = f"the GPU render failed, {type(failure).__name__}: {failure}"
+            self.release()
+            aux = None
+            if not error and depsgraph.scene.moonray_hydra.denoise and not self.test_break():
+                try:  # albedo and normal from the delegate's gbuffer film (nanna:aux); without them Denoise runs on colour only
+                    render = depsgraph.scene.render
+                    scale = render.resolution_percentage / 100
+                    aux = gpu_hydra.read_aux(self.gpu_folder, int(render.resolution_x * scale), int(render.resolution_y * scale))
+                except Exception:
+                    traceback.print_exc()
+            if self.gpu_folder and not os.environ.get("NANNA_GPU_KEEP"):
+                import shutil
+                shutil.rmtree(self.gpu_folder, ignore_errors=True)
+            self.gpu_folder = None
+            if error:
+                self.tell("ERROR", error[:300])
+            elif depsgraph.scene.moonray_hydra.denoise and not self.test_break():
+                self.denoise(depsgraph.view_layer.name, aux=aux or False)  # as 0.9.2's gpu.py route: Blender's OIDN with albedo and normal
             return
         if self.setup_error or not self.engine_ptr:  # Blender leaves a blank picture and no message
             self.release()
@@ -214,13 +292,17 @@ class MoonRayHydraEngine(bpy.types.HydraRenderEngine):
         elif depsgraph.scene.moonray_hydra.denoise and not self.test_break():
             self.denoise(depsgraph.view_layer.name)
 
-    def denoise(self, layer):
+    def denoise(self, layer, aux=True):
         """A failure here leaves the frame as rendered, with a warning."""
-        self.update_stats("", "MoonRay: denoising")
+        self.update_stats("", "Nanna GPU: denoising" if self.gpu_delegate else "Nanna Render: denoising")
         try:
             from . import denoise
-            if not denoise.apply(self, layer):
+            started = time.perf_counter()
+            if not denoise.apply(self, layer, aux):
                 self.tell("WARNING", "denoise found no picture to work on, the frame stays as rendered")
+            elif self.gpu_delegate:
+                guide = "albedo and normal" if isinstance(aux, tuple) else "colour only"
+                print(f"[moonray_hydra] GPU F12 denoised ({guide}) in {time.perf_counter() - started:.2f} s", flush=True)
         except Exception as failure:
             traceback.print_exc()
             self.tell("WARNING", f"denoise failed, the frame stays as rendered. {type(failure).__name__}: {failure}")
@@ -273,9 +355,7 @@ def register():
 
 
 def remove():
-    import sys
-    if __package__ + ".gpu" in sys.modules:  # the warm pbrt.exe goes with the add-on
-        sys.modules[__package__ + ".gpu"].stop()
+    gpu_hydra.shutdown()  # the GPU delegate's pbrt servers: stdin closed, each exits by itself
     if panels.device_on_load in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(panels.device_on_load)
     for panel in standard_panels():

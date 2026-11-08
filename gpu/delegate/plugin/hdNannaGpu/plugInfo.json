@@ -1,0 +1,20 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "Types": {
+                    "HdNannaGpuRendererPlugin": {
+                        "bases": [
+                            "HdRendererPlugin"
+                        ],
+                        "displayName": "Nanna GPU",
+                        "priority": 99
+                    }
+                }
+            },
+            "Name": "hdNannaGpu",
+            "Type": "library",
+            "LibraryPath": "../../bin/hdNannaGpu.dll"
+        }
+    ]
+}

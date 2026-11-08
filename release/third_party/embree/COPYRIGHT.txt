@@ -1,0 +1,4 @@
+Intel Embree 4.4.0
+Copyright 2009-2024 Intel Corporation
+
+Licensed under Apache-2.0; see the licence text(s) in this folder.

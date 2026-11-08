@@ -39,10 +39,10 @@ PASSES = {"Depth": (1, "Z", "VALUE", "cameraDepth", "use_pass_z"),
 class Settings(bpy.types.PropertyGroup):
     device: EnumProperty(
         name="Device", default="CPU",
-        items=(("CPU", "CPU", "MoonRay on the CPU, through Hydra"),
-               ("GPU", "GPU", "Nanna on an NVIDIA RTX card, in its own process. F12 only: Pixel Samples squared per pixel, the Max Bounces, Denoise. "
-                              "Needs the NVIDIA driver, no CUDA install")),
-        description="Where F12 renders", update=lambda self, context: device_changed(self.id_data))
+        items=(("CPU", "CPU", "Render on the CPU, with OpenMoonRay"),
+               ("GPU", "GPU", "Render on an NVIDIA RTX card, F12 and the Rendered viewport. Uses Pixel Samples squared per pixel and Max Bounces. "
+                              "Needs a current NVIDIA driver, no CUDA install")),
+        description="Where F12 and the Rendered viewport render", update=lambda self, context: device_changed(self.id_data))
     sampling_mode: EnumProperty(
         name="Mode", default="UNIFORM",
         items=(("UNIFORM", "Uniform", "The same samples in every pixel: Pixel Samples sets how many"),
@@ -97,12 +97,12 @@ class Settings(bpy.types.PropertyGroup):
     look: EnumProperty(
         name="Look", default="CYCLES",
         items=(("CYCLES", "Match Cycles", "Materials fitted to look as they do in Cycles"),
-               ("NANNA", "Nanna Look", "MoonRay's own coat, sheen, metal and specular, with no fit to Cycles. See Network.__init__ in native.py")),
-        description="How Blender's materials become MoonRay's. Takes effect at the next render")
+               ("NANNA", "Nanna Look", "MoonRay's own coat, sheen, metal and specular, with no fit to Cycles")),
+        description="How Blender's materials are translated. Takes effect at the next render")
     denoise: BoolProperty(
         name="Denoise", default=True,
-        description="Clean the finished frame with Blender's OpenImageDenoise, guided by the surfaces' colour and normals. "
-                    "Adds a few seconds per frame and can soften fine detail")
+        description="Clean the finished frame (F12) with Blender's OpenImageDenoise on the CPU, guided by the surfaces' colour and normals, "
+                    "on Device CPU and Device GPU alike. The Rendered viewport isn't denoised. Can soften fine detail")
 
     max_bounces: IntProperty(
         name="Total", default=12, min=0, max=1024, soft_max=32,
@@ -180,15 +180,18 @@ class Settings(bpy.types.PropertyGroup):
 
 
 def device_changed(scene):
-    """Device GPU keeps a pbrt.exe starting or waiting (gpu.py), so F12 skips its start-up. Device CPU lets it go. Not in background Blender."""
-    import sys
+    """Device GPU keeps a pbrt server starting or waiting (the hdNannaGpu delegate's pool, gpu_hydra.py), so the first F12 or Rendered
+    viewport skips its start-up. Device CPU lets it go. Not in background Blender."""
     if bpy.app.background or scene is None or not hasattr(scene, "moonray_hydra"):
         return
+    from . import gpu_hydra
     if scene.moonray_hydra.device == "GPU":
-        from . import gpu
-        gpu.warm_up()
-    elif __package__ + ".gpu" in sys.modules:
-        sys.modules[__package__ + ".gpu"].release()
+        try:
+            gpu_hydra.warm_up()
+        except Exception as error:  # F12 and the viewport report it
+            print(f"[moonray_hydra] GPU warm-up: {error}", flush=True)
+    else:
+        gpu_hydra.shutdown()
 
 
 @bpy.app.handlers.persistent
@@ -491,7 +494,7 @@ class RENDER_PT_moonray_threads(RenderPanel, bpy.types.Panel):
         row = layout.row()
         row.enabled = render.threads_mode == "FIXED"
         row.prop(render, "threads")
-        layout.label(text="Set once per Blender, by its first MoonRay render", icon="INFO")
+        layout.label(text="Set once per Blender, by its first Device CPU render", icon="INFO")
 
 
 class RENDER_PT_moonray_memory(RenderPanel, bpy.types.Panel):

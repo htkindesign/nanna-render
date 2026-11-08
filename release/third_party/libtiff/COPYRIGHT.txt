@@ -1,0 +1,4 @@
+LibTIFF 4.7.0
+Copyright (c) 1988-1997 Sam Leffler. Copyright (c) 1991-1997 Silicon Graphics, Inc.
+
+Licensed under libtiff; see the licence text(s) in this folder.

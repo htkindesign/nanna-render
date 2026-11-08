@@ -12,7 +12,9 @@ Status: early development, Windows x64 only. The add-on's id is still `moonray_h
 | `addon/` | The Blender add-on: render engine (Hydra, hdMoonray), Render panels, material translator from Blender nodes to MoonRay `DwaBase`, textures, lights, denoising, viewport, GPU render |
 | `build/hdmoonray/` | Scripts that rebuild hdMoonray so it loads inside Blender's own USD on Windows, and package the add-on |
 | `gpu/kernel/` | A port of MoonRay's `DwaBase` BSDF lobes (`lobes.h`) and its energy compensation tables (`lobe_tables.h`, generated from the MoonRay source) to one C++ source shared by CPU and CUDA, with tests against MoonRay. `SPEC_closure.md` describes the sampling rules |
-| `gpu/pbrt/` | Patches that add the MoonRay lobes and Blender export to pbrt-v4 to build the GPU renderer `pbrt.exe` |
+| `gpu/pbrt/` | Patches that add the MoonRay lobes, a server mode and Denoise outputs to pbrt-v4, to build the GPU renderer `nanna_gpu.exe` (a modified pbrt-v4) |
+| `gpu/delegate/` | `hdNannaGpu`, the Hydra render delegate that runs `nanna_gpu.exe` for Device GPU F12 and the Rendered viewport |
+| `release/` | Release packaging: `exclude.txt` and `apply_exclude.py` (trim the zip), `add_third_party.py`, `THIRD_PARTY.md` and `third_party/` (the licence texts of everything the zip ships) |
 | `config.example.bat` | Every root the build scripts read, in one file |
 
 No source code of OpenMoonRay, hdMoonray, OpenUSD or pbrt-v4 is included, only the excerpts the patch scripts change and the port
@@ -25,7 +27,7 @@ not start from the upstream OpenMoonRay releases: it uses the prebuilt MoonRay W
 
 To use it:
 - Windows 10 or 11, x64, and Blender 5.1.2 exactly (the add-on checks Blender's `usd_ms.dll`)
-- Device GPU: an NVIDIA RTX card and a current driver
+- Device GPU: an NVIDIA RTX card and NVIDIA driver 551.61 or newer (the Windows driver of CUDA 12.4, which the GPU renderer is built with)
 
 To build it:
 - Visual Studio 2022 Build Tools with MSVC 14.44 and a Windows 10/11 SDK
@@ -39,8 +41,12 @@ To build it:
 
 1. Fetch the inputs into the work folder (`BUILD.md`, Inputs).
 2. BUILD.md step 1 (`make_def.py`, `build_hd.bat`, `patch_imports.py`, `deploy.bat`, `preload_list.py`): the Hydra plugin for Blender's USD and the runtime folder.
-3. `gpu\pbrt\patch_pbrt.py` on a pbrt-v4 checkout, then `gpu\pbrt\build.bat`: `pbrt.exe` for Device GPU (optional).
-4. `python -I build\hdmoonray\build_dist.py`: the installable zip.
+3. The `gpu\pbrt` patches on a pbrt-v4 checkout, then `gpu\pbrt\build_server.bat` and `gpu\delegate\build.bat`: `nanna_gpu.exe` and
+   `hdNannaGpu.dll` for Device GPU (optional).
+4. `python -I build\hdmoonray\build_dist.py`: the installable zip. Then for a release, 4b `python -I release\apply_exclude.py <zip>`
+   leaves out the runtime files the add-on never loads (`release\exclude.txt`), and 4c `python -I release\add_third_party.py <trimmed zip>
+   <out>\nanna_render-<version>-windows-x64.zip` adds `LICENSE`, `THIRD_PARTY.md` and the third-party licence texts. The release file
+   is `nanna_render-<version>-windows-x64.zip`.
 
 ## Install
 
