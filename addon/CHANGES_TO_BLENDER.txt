@@ -1,0 +1,48 @@
+Nanna Render add-on: what it changes in a user's Blender, and how to remove it
+
+Installing it (Edit > Preferences > Get Extensions > Install from Disk, or dragging the zip into Blender)
+- Unpacks the add-on and the MoonRay runtime, about 480 MB, to
+  %APPDATA%\Blender Foundation\Blender\5.1\extensions\user_default\moonray_hydra\
+- Adds it to the enabled extensions in userpref.blend. No other file in the Blender install or user folders changes.
+
+It installs in Blender 5.1.2 only. If that Blender's usd_ms.dll isn't the original, or the version differs anyway, a MoonRay render stops
+with an error and loads nothing: the DLLs fit that one file.
+
+Enabled, with Nanna Render not selected
+- Adds "Nanna Render" to the Render Engine list, a hidden per-scene setting (scene.moonray_hydra) and one Runtime Folder preference.
+- Adds the engine to Blender's own panels that take any engine, and to the EEVEE material, world, light and depth of field panels, so they
+  show with Nanna Render selected. Other engines keep theirs. Disabling the add-on takes the engine back out.
+- Loads no MoonRay DLL, does not import USD or OpenImageIO, and changes no environment variable.
+
+The first time MoonRay renders, inside that Blender process only
+- Loads about 60 MoonRay DLLs from the add-on's runtime folder, then the shaders a scene needs. They stay loaded until Blender closes.
+- Sets RDL2_DSO_PATH, REZ_MOONRAY_ROOT, HDMOONRAY_BLENDER_UNITS and HDMOONRAY_THREADS. Programs Blender starts inherit these four. PATH is not changed.
+  Nothing is written to the system or user environment.
+- Registers one Hydra plugin with Blender's USD.
+- Writes tiled copies of the scene's images, and normal images worked out from Bump heights, to %TEMP%\hdmoonray_tx. When that folder passes 512 MB, copies not used for an hour are
+  deleted, oldest first. Files used in the last hour stay, so it can go over for a while. Source images and the .blend are only read.
+
+While rendering
+- A World that isn't a plain Background (Sky Texture, Mix, Noise and so on) starts a second Blender, in the background with factory settings, for a few seconds, on
+  the render's thread count. It renders the World with Cycles on the CPU to an EXR in %TEMP%\hdmoonray_tx, under a name made from the World's nodes, so it runs
+  again only when the World changes.
+- A Rendered viewport with MoonRay shows a message and renders nothing, unless Experimental: Rendered viewport is on in the add-on's Preferences (off by default). Use F12, or Solid or Material Preview shading.
+- One MoonRay render at a time. A second one in the same Blender stops with an error.
+- Persistent Data changes nothing for MoonRay: every view layer of every frame is prepared from the start.
+- Materials and worlds that MoonRay can't get from Blender are listed as warnings, each once per render, with a total: see the Info editor.
+- If the render can't be set up, it stops with an error and no picture.
+- Denoise is on by default: Blender's own OpenImageDenoise.dll loads into that Blender, and runs on the CPU over each finished frame. Off, it isn't loaded.
+
+Saved .blend files
+- Hold the render engine choice, and the MoonRay panel's values if they were changed. Without the add-on, Blender ignores the extra setting and
+  shows the engine as unavailable. Pick another engine and the file renders as before.
+
+Remove it
+1. Close Blender, and open it again. Do not render with Nanna Render in this session: Windows can't delete a DLL that's loaded.
+2. Edit > Preferences > Add-ons, find "Nanna Render", open the arrow next to it and choose Uninstall.
+3. If a scene uses it, change Render Engine to Cycles or EEVEE.
+4. Optional: delete the folder %TEMP%\hdmoonray_tx.
+
+If Blender can't start or the entry is stuck, close Blender and delete the moonray_hydra folder named above. That's all it installed.
+The same removal from a command line, with Blender closed:
+  "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --command extension remove user_default.moonray_hydra

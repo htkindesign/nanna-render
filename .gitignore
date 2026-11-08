@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+*.dll
+*.exe
+*.pdb
+*.lib
+*.zip
+*.tx
+*.exr
+*.ptx
+*.obj
+out/
+build_out/
+runtime/
+dist/
+logs/
+tmp/
+isolated/
+config.bat
+# build\hdmoonray outputs and fetched inputs
+build/hdmoonray/build/
+build/hdmoonray/deps/
+build/hdmoonray/include/
+build/hdmoonray/lib/
+build/hdmoonray/tbb2020/
+build/hdmoonray/hdMoonray_src/
+build/hdmoonray/*.def
+# gpu: pbrt work folders and outputs, if kept inside the clone
+gpu/pbrt-v4/
+gpu/build/
+build/hdmoonray/patch_log.json

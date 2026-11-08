@@ -1,0 +1,9 @@
+hd_moonray_debug.dll
+common_file_resource.dll
+common_interpolation.dll
+common_noise.dll
+geometry_data.dll
+map_primvar.dll
+map_projection.dll
+material_dwabase.dll
+material_glitter.dll
